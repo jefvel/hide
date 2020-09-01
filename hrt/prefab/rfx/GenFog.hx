@@ -1,6 +1,6 @@
 package hrt.prefab.rfx;
 
-class GenFogShader extends h3d.shader.ScreenShader {
+class GenFogShader extends PbrShader {
 
 	static var SRC = {
 
@@ -19,37 +19,33 @@ class GenFogShader extends h3d.shader.ScreenShader {
 		@const var usePosition : Bool;
 		@param var position : Vec3;
 
-		@ignore @param var depthTexture : Channel;
-		@ignore @param var cameraPos : Vec3;
-		@ignore @param var cameraInverseViewProj : Mat4;
-
-		function getPosition( uv: Vec2 ) : Vec3 {
-			var depth = depthTexture.get(uv);
-			var uv2 = uvToScreen(calculatedUV);
-			var isSky = 1 - ceil(depth);
-			depth = mix(depth, 1, isSky);
-			var temp = vec4(uv2, depth, 1) * cameraInverseViewProj;
-			var originWS = temp.xyz / temp.w;
-			return originWS;
-		}
+		@const var useNoise : Bool;
+		@param var noiseTex : Sampler2D;
+		@param var noiseScale : Float;
+		@param var noiseSpeed : Float;
+		@param var noiseAmount : Vec3;
 
 		function fragment() {
-			var calculatedUV = input.uv;
-			var origin = getPosition(calculatedUV);
+			var origin = getPosition();
 			var amount = 0.;
 
-			if( distanceScale != 0 ) {
-				var distance = (origin - (usePosition ? position : cameraPos)).length() - cameraDistance;
+			if( useNoise ) {
+				var noise = noiseTex.get( origin.xy * noiseScale + vec2(global.time * noiseSpeed, noiseScale * origin.z) * vec2(1,-1) );
+				origin += (noise.rgb - 0.5) * noiseAmount;
+			}
+
+			if( distanceOpacity != 0 ) {
+				var distance = (origin - (usePosition ? position : camera.position)).length() - cameraDistance;
 				amount += clamp((distance - startDistance) * distanceScale, 0, 1) * distanceOpacity;
 			}
 
-			if( heightScale != 0 ) {
+			if( heightOpacity != 0 ) {
 				var height = origin.z;
 				if( usePosition ) height -= position.z;
 				amount += clamp((height - startHeight) * heightScale, 0, 1) * heightOpacity;
 			}
 
-			var fogColor = mix(startColor, endColor, amount);
+			var fogColor = mix(startColor, endColor, clamp(amount,0,1));
 			pixelColor = fogColor;
 		}
 
@@ -59,6 +55,14 @@ class GenFogShader extends h3d.shader.ScreenShader {
 		super();
 	}
 
+}
+
+typedef GenFogNoise = {
+	var texture : String;
+	var speed : Float;
+	var scale : Float;
+	var amount : Float;
+	var distAmount : Float;
 }
 
 typedef GenFogProps = {
@@ -77,6 +81,8 @@ typedef GenFogProps = {
 	var startColor : Int;
 	var endColor : Int;
 	var renderMode : String;
+
+	var ?noise : GenFogNoise;
 
 	var posX : Float;
 	var posY : Float;
@@ -115,12 +121,11 @@ class GenFog extends RendererFX {
 		fogPass.pass.setBlendMode(Alpha);
 	}
 
-	override function apply(r:h3d.scene.Renderer, step:h3d.impl.RendererFX.Step) {
+	override function end(r:h3d.scene.Renderer, step:h3d.impl.RendererFX.Step) {
 		var p : GenFogProps = props;
 		if( (step == AfterTonemapping && p.renderMode == "AfterTonemapping") || (step == BeforeTonemapping && p.renderMode == "BeforeTonemapping") ) {
 			r.mark("DistanceFog");
 			var ctx = r.ctx;
-			var depth : hxsl.ChannelTexture = ctx.getGlobal("depthMap");
 
 			fogPass.shader.startDistance = p.startDistance;
 			fogPass.shader.distanceScale = 1 / (p.endDistance - p.startDistance);
@@ -139,12 +144,17 @@ class GenFog extends RendererFX {
 			fogPass.shader.position.set(p.posX, p.posY, p.posZ);
 			fogPass.shader.usePosition = p.usePosition;
 
-			fogPass.shader.depthTextureChannel = depth.channel;
-			fogPass.shader.depthTexture = depth.texture;
+			fogPass.shader.useNoise = p.noise != null && p.noise.texture != null;
+			if( p.noise != null && p.noise.texture != null ) {
+				fogPass.shader.noiseTex = hxd.res.Loader.currentInstance.load(p.noise.texture).toTexture();
+				fogPass.shader.noiseTex.wrap = Repeat;
+				fogPass.shader.noiseScale = 1 / p.noise.scale;
+				fogPass.shader.noiseSpeed = p.noise.speed / p.noise.scale;
+				fogPass.shader.noiseAmount.set(p.noise.amount * p.noise.distAmount, p.noise.amount * p.noise.distAmount, p.noise.amount);
+			}
 
-			fogPass.shader.cameraPos = ctx.camera.pos;
-			fogPass.shader.cameraInverseViewProj.load(ctx.camera.getInverseViewProj());
 
+			fogPass.setGlobals(ctx);
 			fogPass.render();
 		}
 	}
@@ -186,6 +196,41 @@ class GenFog extends RendererFX {
 
 			</dl>
 		'),props);
+		var props : GenFogProps = props;
+		if( props.noise == null ) {
+			var e = ctx.properties.add(new hide.Element('
+			<div class="group" name="Noise">
+			<dl><dt></dt><dd><a class="button" href="#">Add</a></dd></dl>
+			</div>
+			'));
+			e.find("a.button").click(function(_) {
+				props.noise = {
+					texture : null,
+					amount : 1,
+					scale : 1,
+					speed : 1,
+					distAmount : 0.5,
+				};
+				ctx.rebuildProperties();
+			});
+		} else {
+			var e = ctx.properties.add(new hide.Element('
+			<div class="group" name="Noise">
+			<dl>
+				<dt>Texture</dt><dd><input type="texturepath" field="texture"/></dd>
+				<dt>Amount</dt><dd><input type="range" min="0" max="10" field="amount"/></dd>
+				<dt>Scale</dt><dd><input type="range" min="0" max="10" field="scale"/></dd>
+				<dt>Speed</dt><dd><input type="range" min="0" max="10" field="speed"/></dd>
+				<dt>Dist.Amount</dt><dd><input type="range" min="0" max="10" field="distAmount"/></dd>
+				<dt></dt><dd><a class="button" href="#">Remove</a></dd>
+			</dl>
+			</div>
+			'),props.noise);
+			e.find("a.button").click(function(_) {
+				props.noise = null;
+				ctx.rebuildProperties();
+			});
+		}
 	}
 	#end
 

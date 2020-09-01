@@ -1,5 +1,6 @@
 package hide.comp;
 
+import hrt.prefab.Reference;
 import h3d.col.Sphere;
 import h3d.scene.Mesh;
 import h3d.col.FPoint;
@@ -184,7 +185,7 @@ class SceneEditor {
 		scene.editor = this;
 		scene.onReady = onSceneReady;
 		scene.onResize = function() {
-			cameraController2D.toTarget();
+			if( cameraController2D != null ) cameraController2D.toTarget();
 			onResize();
 		};
 
@@ -322,6 +323,15 @@ class SceneEditor {
 		c.zoomAmount = 1.05;
 		c.smooth = 0.7;
 		return c;
+	}
+
+	public function setFullScreen( b : Bool ) {
+		view.fullScreen = b;
+		if( b ) {
+			view.element.find(".tabs").hide();
+		} else {
+			view.element.find(".tabs").show();
+		}
 	}
 
 	function makeCamController2D() {
@@ -673,8 +683,19 @@ class SceneEditor {
 			if( lastRenderProps == null )
 				lastRenderProps = renderProps[0];
 		}
-		if(lastRenderProps != null)
+
+		if( lastRenderProps != null )
 			lastRenderProps.applyProps(scene.s3d.renderer);
+		else {
+			var refPrefab = new Reference();
+			refPrefab.refpath = view.config.getLocal("scene.renderProps");
+			refPrefab.makeInstance(context);
+			if( @:privateAccess refPrefab.ref != null ) {
+				var renderProps = @:privateAccess refPrefab.ref.get(hrt.prefab.RenderProps);
+				if( renderProps != null )
+					renderProps.applyProps(scene.s3d.renderer);
+			}
+		}
 
 		onRefresh();
 	}
@@ -1302,12 +1323,14 @@ class SceneEditor {
 		scene.init(ctx.local3d);
 	}
 
-	public function addObject(elts : Array<PrefabElement>, selectObj : Bool = true, doRefresh : Bool = true) {
+	public function addObject(elts : Array<PrefabElement>, selectObj : Bool = true, doRefresh : Bool = true, isTemporary = false) {
 		for (e in elts) {
 			makeInstance(e);
 		}
 		if (doRefresh)
 			refresh(Partial, if (selectObj) () -> selectObjects(elts, NoHistory) else null);
+		if( isTemporary )
+			return;
 		undo.change(Custom(function(undo) {
 			var fullRefresh = false;
 			if(undo) {

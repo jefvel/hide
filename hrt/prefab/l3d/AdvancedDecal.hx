@@ -95,7 +95,7 @@ class AdvancedDecal extends Object3D {
 
 	public function updateRenderParams(ctx) {
 		var mesh = Std.downcast(ctx.local3d, h3d.scene.Mesh);
-		mesh.material.blendMode = blendMode;
+		mesh.material.mainPass.setBlendMode(blendMode);
 		switch (renderMode) {
 			case Decal:
 				var shader = mesh.material.mainPass.getShader(h3d.shader.pbr.VolumeDecal.DecalPBR);
@@ -173,7 +173,10 @@ class AdvancedDecal extends Object3D {
 			o.remove();
 	}
 
-	var pbrParams = '<dt>Albedo</dt><dd><input type="texturepath" field="albedoMap"/>
+	override function edit( ctx : EditContext ) {
+		super.edit(ctx);
+
+		var pbrParams = '<dt>Albedo</dt><dd><input type="texturepath" field="albedoMap"/>
 					<br/><input type="range" min="0" max="1" field="albedoStrength"/></dd>
 
 					<dt>Normal</dt><dd><input type="texturepath" field="normalMap"/>
@@ -182,12 +185,9 @@ class AdvancedDecal extends Object3D {
 					<dt>PBR</dt><dd><input type="texturepath" field="pbrMap"/>
 					<br/><input type="range" min="0" max="1" field="pbrStrength"/></dd>';
 
-	var overlayParams = '<dt>Color</dt><dd><input type="texturepath" field="albedoMap"/></dd>
+		var overlayParams = '<dt>Color</dt><dd><input type="texturepath" field="albedoMap"/></dd>
 						<dt>Emissive</dt><dd> <input type="range" min="0" max="10" field="emissive"/></dd>
 						<dt>AutoAlpha</dt><dd><input type="checkbox" field="autoAlpha"/></dd>';
-
-	override function edit( ctx : EditContext ) {
-		super.edit(ctx);
 
 		var params = switch (renderMode) {
 			case Decal: pbrParams;
