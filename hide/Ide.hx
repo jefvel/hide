@@ -29,6 +29,7 @@ class Ide {
 	var databaseDiff : String;
 	var pakFile : hxd.fmt.pak.FileSystem;
 	var originDataBase : cdb.Database;
+	var dbWatcher : hide.tools.FileWatcher.FileWatchEvent;
 
 	var config : {
 		global : Config,
@@ -189,9 +190,9 @@ class Ide {
 		if( subView != null ) body.className +=" hide-subview";
 
 		// Listen to FileTree dnd
-		new Element(window.window.document).on("dnd_stop.vakata.jstree", function(e, data) {
+		function treeDragFun(data,drop) {
 			var nodeIds : Array<String> = cast data.data.nodes;
-			if(data.data.jstree == null) return;
+			if(data.data.jstree == null) return false;
 			for( ft in getViews(hide.view.FileTree) ) {
 				var paths = [];
 				@:privateAccess {
@@ -205,11 +206,16 @@ class Ide {
 				if(paths.length == 0)
 					continue;
 				var view = getViewAt(mouseX, mouseY);
-				if(view != null) {
-					view.onDragDrop(paths, true);
-					return;
-				}
+				if(view != null)
+					return view.onDragDrop(paths, drop);
 			}
+			return false;
+		}
+		new Element(window.window.document).on("dnd_move.vakata.jstree", function(e, data:Dynamic) {
+			(data.helper:hide.Element).css(treeDragFun(data,false) ? { filter : "brightness(120%)", opacity : 1 } : { filter : "", opacity : 0.5 });
+		});
+		new Element(window.window.document).on("dnd_stop.vakata.jstree", function(e, data) {
+			treeDragFun(data,true);
 		});
 
 		// dispatch global keys based on mouse position
@@ -544,7 +550,7 @@ class Ide {
 			}
 		}
 		loadDatabase();
-		fileWatcher.register(databaseFile,function() {
+		dbWatcher = fileWatcher.register(databaseFile,function() {
 			loadDatabase(true);
 			hide.comp.cdb.Editor.refreshAll(true);
 		});
@@ -711,8 +717,8 @@ class Ide {
 	public function saveDatabase() {
 		hide.comp.cdb.DataFiles.save(function() {
 			if( databaseDiff != null ) {
-				fileWatcher.ignoreNextChange(databaseDiff);
 				sys.io.File.saveContent(getPath(databaseDiff), toJSON(new cdb.DiffFile().make(originDataBase,database)));
+				fileWatcher.ignorePrevChange(dbWatcher);
 			} else {
 				if( !sys.FileSystem.exists(getPath(databaseFile)) && fileExists(databaseFile) ) {
 					// was loaded from pak, cancel changes
@@ -720,8 +726,8 @@ class Ide {
 					hide.comp.cdb.Editor.refreshAll();
 					return;
 				}
-				fileWatcher.ignoreNextChange(databaseFile);
 				sys.io.File.saveContent(getPath(databaseFile), database.save());
+				fileWatcher.ignorePrevChange(dbWatcher);
 			}
 		});
 	}

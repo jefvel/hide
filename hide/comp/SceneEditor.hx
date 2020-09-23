@@ -223,8 +223,10 @@ class SceneEditor {
 		view.keys.register("sceneeditor.isolate", function() {	isolate(curEdit.elements); });
 		view.keys.register("sceneeditor.showAll", function() {	setVisible(context.shared.elements(), true); });
 		view.keys.register("sceneeditor.selectParent", function() {
-			if(curEdit.rootElements.length > 0)
-				selectObjects([curEdit.rootElements[0].parent]);
+			if(curEdit.rootElements.length > 0) {
+				var p = curEdit.rootElements[0].parent;
+				if( p != null && p != sceneData ) selectObjects([p]);
+			}
 		});
 		view.keys.register("sceneeditor.reparent", function() {
 			if(curEdit.rootElements.length > 1) {
@@ -1531,14 +1533,29 @@ class SceneEditor {
 		return localMat;
 	}
 
-	public function dropObjects(paths: Array<String>, parent: PrefabElement) {
+	public function onDragDrop( items : Array<String>, isDrop : Bool ) {
+		var supported = @:privateAccess hrt.prefab.Library.registeredExtensions;
+		var paths = [];
+		for(path in items) {
+			var ext = haxe.io.Path.extension(path).toLowerCase();
+			if( supported.exists(ext) )
+				paths.push(path);
+		}
+		if( paths.length == 0 )
+			return false;
+		if(isDrop)
+			dropObjects(paths, sceneData);
+		return true;
+	}
+
+	function dropObjects(paths: Array<String>, parent: PrefabElement) {
 		scene.setCurrent();
 		var localMat = getPickTransform(parent);
 		if(localMat == null) return;
 
-		localMat.tx = hxd.Math.round(localMat.tx);
-		localMat.ty = hxd.Math.round(localMat.ty);
-		localMat.tz = hxd.Math.round(localMat.tz);
+		localMat.tx = hxd.Math.round(localMat.tx * 10) / 10;
+		localMat.ty = hxd.Math.round(localMat.ty * 10) / 10;
+		localMat.tz = hxd.Math.floor(localMat.tz * 10) / 10;
 
 		var elts: Array<PrefabElement> = [];
 		for(path in paths) {
@@ -2271,7 +2288,18 @@ class SceneEditor {
 	}
 
 	function getGroundPrefabs() : Array<PrefabElement> {
-		return sceneData.findAll((p) -> p);
+		function getAll(data:PrefabElement) {
+			var all = data.findAll((p) -> p);
+			for( a in all.copy() ) {
+				var r = Std.downcast(a, hrt.prefab.Reference);
+				if( r != null ) {
+					var sub = @:privateAccess r.ref;
+					if( sub != null ) all = all.concat(getAll(sub));
+				}
+			}
+			return all;
+		}
+		return getAll(sceneData);
 	}
 
 	public function projectToGround(ray: h3d.col.Ray, ?paintOn : hrt.prefab.Prefab ) {
