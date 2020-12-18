@@ -3,7 +3,6 @@ import hxd.Key in K;
 
 class Cell extends Component {
 
-	static var UID = 0;
 	static var typeNames = [for( t in Type.getEnumConstructs(cdb.Data.ColumnType) ) t.substr(1).toLowerCase()];
 
 	var editor : Editor;
@@ -53,6 +52,58 @@ class Cell extends Component {
 			else
 				root.addClass("t_readonly");
 		}
+
+		root.click(function(e) {
+			editor.cursor.clickCell(this, e.shiftKey);
+			e.stopPropagation();
+		});
+		root.contextmenu(function(e) {
+			showMenu();
+			e.stopPropagation();
+			e.preventDefault();
+		});
+	}
+
+	function evaluate() {
+		var f = editor.formulas.get(this);
+		if( f == null ) return;
+		var newV : Float = try f.call(line.obj) catch( e : Dynamic ) Math.NaN;
+		if( newV != currentValue ) {
+			currentValue = newV;
+			Reflect.setField(line.obj, column.name, newV);
+			refresh();
+		}
+	}
+
+	function showMenu() {
+		var menu : Array<hide.comp.ContextMenu.ContextMenuItem> = null;
+		switch( column.type ) {
+		case TRef(_):
+			if( value != null && value != "" )
+				menu = [
+					{ label : "Goto", click : () -> @:privateAccess editor.gotoReference(this) },
+				];
+		case TInt, TFloat:
+			function setF( f : Formulas.Formula ) {
+				editor.beginChanges();
+				editor.formulas.set(this, f);
+				line.evaluate();
+				editor.endChanges();
+				refresh();
+			}
+			var forms : Array<hide.comp.ContextMenu.ContextMenuItem>;
+			var current = editor.formulas.get(this);
+			forms = [for( f in editor.formulas.getList(table.sheet) ) { label : f.name, click : () -> if( f == current ) setF(null) else setF(f), checked : f == current }];
+			forms.push({ label : "New...", click : () -> editor.formulas.createNew(this, setF) });
+			menu = [
+				{ label : "Formula", menu : forms }
+			];
+		default:
+		}
+		if( menu != null ) {
+			focus();
+			new ContextMenu(menu);
+		}
 	}
 
 	public function canEdit() {
@@ -90,10 +141,12 @@ class Cell extends Component {
 		element.removeClass("edit_long");
 		switch( column.type ) {
 		case TBool:
-			element.removeClass("true false").addClass( value==true ? "true" : "false" );
+			element.toggleClass("true", value == true);
+			element.toggleClass("false", value == false);
 		case TInt, TFloat:
-			element.removeClass("zero");
-			if( value == 0 ) element.addClass("zero");
+			element.toggleClass("zero", value == 0 );
+			element.toggleClass("nan", Math.isNaN(value));
+			element.toggleClass("formula", editor.formulas.has(this) );
 		default:
 		}
 	}
@@ -326,6 +379,7 @@ class Cell extends Component {
 			[
 				"cdb."+table.sheet.name => line.obj,
 				"cdb.objID" => objID,
+				"cdb.groupID" => line.getGroupID(),
 			]
 		).check(ecode);
 		if( error != null )
@@ -363,16 +417,51 @@ class Cell extends Component {
 			if( isInline ) return "";
 			return '<span class="error">' + v.file + '</span>';
 		}
-		var id = UID++;
 		var width = v.size * (v.width == null?1:v.width);
 		var height = v.size * (v.height == null?1:v.height);
 		var max = width > height ? width : height;
 		var zoom = max <= 32 ? 2 : 64 / max;
 		var inl = isInline ? 'display:inline-block;' : '';
 		var url = "file://" + path;
-		var html = '<div class="tile" id="_c${id}" style="width : ${Std.int(width * zoom)}px; height : ${Std.int(height * zoom)}px; background : url(\'$url\') -${Std.int(v.size*v.x*zoom)}px -${Std.int(v.size*v.y*zoom)}px; opacity:0; $inl"></div>';
-		html += '<img src="$url" style="display:none" onload="$(\'#_c$id\').css({opacity:1, backgroundSize : ((this.width*$zoom)|0)+\'px \' + ((this.height*$zoom)|0)+\'px\' '+(zoom > 1 ? ", imageRendering : 'pixelated'" : "") +'}); if( this.parentNode != null ) this.parentNode.removeChild(this)"/>';
+
+		var px = Std.int(v.size*v.x*zoom);
+		var py = Std.int(v.size*v.y*zoom);
+		var html = '<div class="tile toload" path="$path" pos="$px:$py:$zoom" style="width : ${Std.int(width * zoom)}px; height : ${Std.int(height * zoom)}px; opacity:0; $inl"></div>';
+		html += '<script>hide.comp.cdb.Cell.startTileLoading()</script>';
 		return html;
+	}
+
+	static function startTileLoading() {
+		var tiles = new Element(".tile.toload");
+		if( tiles.length == 0 ) return;
+		tiles.removeClass("toload");
+		var imap = new Map();
+		for( t in tiles )
+			imap.set(t.getAttribute("path"), t);
+		for( path => elt in imap ) {
+			var img = js.Browser.document.createImageElement();
+			img.src = "file://"+path;
+			img.setAttribute("style","display:none");
+			img.onload = function() {
+				var iwidth = img.width;
+				var iheight = img.height;
+				for( t in tiles )
+					if( t.getAttribute("path") == path ) {
+						var pos = t.getAttribute("pos").split(":");
+						var px = Std.parseInt(pos[0]);
+						var py = Std.parseInt(pos[1]);
+						var zoom = Std.parseFloat(pos[2]);
+						var bgw = Std.int(iwidth*zoom);
+						var bgh = Std.int(iheight*zoom);
+						var bg = 'url("$path") -${px}px -${py}px / ${bgw}px ${bgh}px';
+						if( zoom > 1 )
+							bg += ";image-rendering:pixelated";
+						t.setAttribute("style", t.getAttribute("style")+" background : "+bg+"; opacity : 1;");
+					}
+				img.remove();
+			};
+			elt.parentElement.append(img);
+		}
 	}
 
 	public function isTextInput() {
@@ -505,6 +594,7 @@ class Cell extends Component {
 				sel2.close();
 				closeEdit();
 			});
+			new Element("input.select2-search__field").keydown(function(e) e.stopPropagation());
 			s.on("select2:close", function(_) closeEdit());
 		case TEnum(values):
 			element.empty();
@@ -528,7 +618,7 @@ class Cell extends Component {
 				sel2.close();
 				closeEdit();
 			});
-			s.keydown(function(e) {
+			new Element("input.select2-search__field").keydown(function(e) {
 				switch( e.keyCode ) {
 				case K.LEFT, K.RIGHT:
 					s.blur();
@@ -560,9 +650,6 @@ class Cell extends Component {
 			modal.click(function(_) color.close());
 		case TFile:
 				var extensions = ["*"];
-				if (column.extension != null && column.extension.length > 0) {
-					extensions = column.extension.split(",").map(s -> StringTools.trim(s));
-				}
 				ide.chooseFile(extensions, function(file) {
 				if( file != null ) {
 					setValue(file);

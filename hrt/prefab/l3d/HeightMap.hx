@@ -178,6 +178,17 @@ class HeightMapTile {
 	}
 
 	function addObjects( mesh : HeightMapMesh ) {
+		var model = null;
+		decodeObjects(function(name) {
+			model = mesh.resolveAssetModel(name);
+			return model != null;
+		},function(pos) {
+			if( !mesh.isAssetFiltered(model,pos) )
+				@:privateAccess mesh.world.addTransform(model, pos);
+		});
+	}
+
+	public inline function decodeObjects( onModel : String -> Bool, onAdd : h3d.Matrix -> Void ) {
 		var data = hmap.storedCtx.shared.loadBytes(hmap.resolveTexturePath(hmap.objects.file,tx,ty));
 		if( data == null ) return;
 		var xml = new haxe.xml.Access(Xml.parse(data.toString()).firstElement());
@@ -191,8 +202,7 @@ class HeightMapTile {
 
 		for( layer in xml.node.Objects.node.Layers.nodes.Layer ) {
 			for( obj in layer.nodes.Object ) {
-				var model = mesh.resolveAssetModel(obj.att.MeshAssetFileName);
-				if( model == null ) continue;
+				if( !onModel(obj.att.MeshAssetFileName) ) continue;
 				var data = haxe.crypto.Base64.decode(obj.node.Data.innerData);
 				for( i in 0...Std.int(data.length/40) ) {
 					var p = i * 40;
@@ -222,7 +232,7 @@ class HeightMapTile {
 					mat.ty = y + posY;
 					mat.tz = hmap.getZ(mat.tx, mat.ty);
 
-					@:privateAccess mesh.world.addTransform(model, mat);
+					onAdd(mat);
 				}
 			}
 		}
@@ -282,6 +292,10 @@ class HeightMapMesh extends h3d.scene.Object {
 	public dynamic function onTileReady( t : HeightMapTile ) {
 	}
 
+	public dynamic function isAssetFiltered( obj : h3d.scene.World.WorldModel, pos : h3d.Matrix ) {
+		return false;
+	}
+
 	function checkTile( ctx : h3d.scene.RenderContext, x : Int, y : Int ) {
 		var t = hmap.getTile(x,y);
 		if( !ctx.camera.frustum.hasBounds(t.bounds) || t.isEmpty() ) {
@@ -305,11 +319,15 @@ class HeightMapMesh extends h3d.scene.Object {
 	public function init() {
 		var htex = hmap.getTextures(Height, 0, 0)[0];
 		var size = hmap.size;
-		var width = htex == null ? Std.int(size) : htex.width;
-		var height = htex == null ? Std.int(size) : htex.height;
+		var width = htex == null ? Std.int(size) : Math.ceil(htex.width * hmap.heightPrecision);
+		var height = htex == null ? Std.int(size) : Math.ceil(htex.height * hmap.heightPrecision);
+		width >>= (4 - hmap.quality);
+		height >>= (4 - hmap.quality);
 		var cw = size/width, ch = size/height;
 		if( grid == null || grid.width != width || grid.height != height || grid.cellWidth != cw || grid.cellHeight != ch ) {
 			grid = new HeightGrid(width,height,cw+epsilon/width,ch+epsilon/height);
+			grid.zMin = hmap.minZ;
+			grid.zMax = hmap.maxZ;
 			grid.addUVs();
 			grid.addNormals();
 		}
@@ -350,8 +368,10 @@ class HeightMap extends Object3D {
 	var size = 128.;
 	var heightScale = 0.2;
 	var normalScale = 1.;
+	var heightPrecision = 1.;
 	var minZ = -10;
 	var maxZ = 30;
+	public var quality = 4;
 	var objects : {
 		var file : String;
 		var assetsPath : String;
@@ -372,6 +392,9 @@ class HeightMap extends Object3D {
 		o.size = size;
 		o.heightScale = heightScale;
 		o.normalScale = normalScale;
+		if( heightPrecision != 1 )
+			o.heightPrecision = heightPrecision;
+		o.quality = quality;
 		o.minZ = minZ;
 		o.maxZ = maxZ;
 		if( objects != null )
@@ -385,8 +408,10 @@ class HeightMap extends Object3D {
 		size = obj.size;
 		heightScale = obj.heightScale;
 		normalScale = obj.normalScale;
+		if( obj.heightPrecision != null ) heightPrecision = obj.heightPrecision;
 		if( obj.minZ != null ) minZ = obj.minZ;
 		if( obj.maxZ != null ) maxZ = obj.maxZ;
+		if( obj.quality != null ) quality = obj.quality;
 		objects = obj.objects;
 	}
 
@@ -582,9 +607,11 @@ class HeightMap extends Object3D {
 			<dl>
 				<dt>Size</dt><dd><input type="range" min="0" max="1000" value="128" field="size"/></dd>
 				<dt>Height Scale</dt><dd><input type="range" min="0" max="1" field="heightScale"/></dd>
+				<dt>Height Precision</dt><dd><input type="range" min="0.1" max="1" field="heightPrecision"/></dd>
 				<dt>Normal Scale</dt><dd><input type="range" min="0" max="2" field="normalScale"/></dd>
 				<dt>MinZ</dt><dd><input type="range" min="-1000" max="0" field="minZ"/></dd>
 				<dt>MaxZ</dt><dd><input type="range" min="0" max="1000" field="maxZ"/></dd>
+				<dt>Quality</dt><dd><input type="range" min="0" max="4" field="quality" step="1"/></dd>
 			</dl>
 			</div>
 			<div class="group" name="Textures">
@@ -716,6 +743,16 @@ class HeightGrid extends h3d.prim.MeshPrimitive {
 	**/
 	public var cellHeight (default, null)  : Float;
 
+	/**
+	 *  Minimal Z value, used for reporting bounds.
+	 **/
+	public var zMin = 0.;
+
+	/**
+	 *  Maximal Z value, used for reporting bounds.
+	 **/
+	 public var zMax = 0.;
+
 	var hasNormals : Bool;
 	var hasUVs : Bool;
 
@@ -735,7 +772,7 @@ class HeightGrid extends h3d.prim.MeshPrimitive {
 	}
 
 	override function getBounds():h3d.col.Bounds {
-		return h3d.col.Bounds.fromValues(0,0,0,width*cellWidth,height*cellHeight,0);
+		return h3d.col.Bounds.fromValues(0,0,zMin,width*cellWidth,height*cellHeight,zMax-zMin);
 	}
 
 	override function alloc(engine:h3d.Engine) {

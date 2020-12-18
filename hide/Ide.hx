@@ -714,7 +714,7 @@ class Ide {
 		}
 	}
 
-	public function saveDatabase() {
+	public function saveDatabase( ?forcePrefabs ) {
 		hide.comp.cdb.DataFiles.save(function() {
 			if( databaseDiff != null ) {
 				sys.io.File.saveContent(getPath(databaseDiff), toJSON(new cdb.DiffFile().make(originDataBase,database)));
@@ -729,7 +729,7 @@ class Ide {
 				sys.io.File.saveContent(getPath(databaseFile), database.save());
 				fileWatcher.ignorePrevChange(dbWatcher);
 			}
-		});
+		}, forcePrefabs);
 	}
 
 	public function createDBSheet( ?index : Int ) {
@@ -749,10 +749,27 @@ class Ide {
 		path = path.split("\\").join("/");
 		if( StringTools.startsWith(path.toLowerCase(), resourceDir.toLowerCase()+"/") )
 			return path.substr(resourceDir.length+1);
+
+		// is already a relative path
+		if( path.charCodeAt(0) != "/".code && path.charCodeAt(1) != ":".code )
+			return path;
+
+		var resParts = resourceDir.split("/");
+		var pathParts = path.split("/");
+		for( i in 0...resParts.length ) {
+			if( pathParts[i].toLowerCase() != resParts[i].toLowerCase() ) {
+				if( pathParts[i].charCodeAt(pathParts[i].length-1) == ":".code )
+					return path; // drive letter change
+				var newPath = pathParts.splice(i, pathParts.length - i);
+				for( k in 0...resParts.length - i )
+					newPath.unshift("..");
+				return newPath.join("/");
+			}
+		}
 		return path;
 	}
 
-	public static var IMG_EXTS = ["jpg", "jpeg", "gif", "png", "raw", "dds"];
+	public static var IMG_EXTS = ["jpg", "jpeg", "gif", "png", "raw", "dds", "hdr", "tga"];
 	public function chooseImage( onSelect ) {
 		chooseFile(IMG_EXTS, onSelect);
 	}
@@ -760,8 +777,9 @@ class Ide {
 	public function chooseFiles( exts : Array<String>, onSelect : Array<String> -> Void ) {
 		var e = new Element('<input type="file" style="visibility:hidden" value="" accept="${[for( e in exts ) "."+e].join(",")}" multiple="multiple"/>');
 		e.change(function(_) {
-			var files = [for( f in (""+e.val()).split(";") ) makeRelative(f)];
+			var files = [for( f in (""+e.val()).split(";") ) f];
 			if( files.length == 1 && files[0] == "" ) files.pop();
+			var files = [for( f in files ) makeRelative(f)];
 			e.remove();
 			onSelect(files);
 		}).appendTo(window.window.document.body).click();
@@ -770,9 +788,9 @@ class Ide {
 	public function chooseFile( exts : Array<String>, onSelect : Null<String> -> Void ) {
 		var e = new Element('<input type="file" style="visibility:hidden" value="" accept="${[for( e in exts ) "."+e].join(",")}"/>');
 		e.change(function(_) {
-			var file = makeRelative(e.val());
+			var file = e.val();
 			e.remove();
-			onSelect(file == "" ? null : file);
+			onSelect(file == "" ? null : makeRelative(file));
 		}).appendTo(window.window.document.body).click();
 	}
 
@@ -783,17 +801,17 @@ class Ide {
 		var path = path.join(c);
 		var e = new Element('<input type="file" style="visibility:hidden" value="" nwworkingdir="$path" nwsaveas="$file"/>');
 		e.change(function(_) {
-			var file = makeRelative(e.val());
+			var file = e.val();
 			e.remove();
-			onSelect(file == "" ? null : file);
+			onSelect(file == "" ? null : makeRelative(file));
 		}).appendTo(window.window.document.body).click();
 	}
 
-	public function chooseDirectory( onSelect : String -> Void ) {
+	public function chooseDirectory( onSelect : String -> Void, ?isAbsolute = false ) {
 		var e = new Element('<input type="file" style="visibility:hidden" value="" nwdirectory/>');
 		e.change(function(ev) {
-			var dir = makeRelative(ev.getThis().val());
-			onSelect(dir == "" ? null : dir);
+			var dir = ev.getThis().val();
+			onSelect(dir == "" ? null : (isAbsolute ? dir : makeRelative(dir)));
 			e.remove();
 		}).appendTo(window.window.document.body).click();
 	}
@@ -855,6 +873,7 @@ class Ide {
 
 	function browseFiles( callb : String -> Void ) {
 		function browseRec(path) {
+			if( path == ".tmp" ) return;
 			for( p in sys.FileSystem.readDirectory(resourceDir + "/" + path) ) {
 				var p = path == "" ? p : path + "/" + p;
 				if( sys.FileSystem.isDirectory(resourceDir+"/"+p) ) {
@@ -893,7 +912,7 @@ class Ide {
 				if( StringTools.endsWith(dir,"/res") || StringTools.endsWith(dir,"\\res") )
 					dir = dir.substr(0,-4);
 				setProject(dir);
-			});
+			}, true);
 		});
 		menu.find(".project .clear").click(function(_) {
 			ideConfig.recentProjects = [];
@@ -908,6 +927,43 @@ class Ide {
 			nw.App.clearCache();
 			try sys.FileSystem.deleteFile(Ide.inst.appPath + "/props.json") catch( e : Dynamic ) {};
 			untyped chrome.runtime.reload();
+		});
+		menu.find(".build-files").click(function(_) {
+			var lastTime = haxe.Timer.stamp();
+			var all = [""];
+			var done = 0;
+			var prevTitle = window.title;
+			function loop() {
+				while( true ) {
+					if( all.length == 0 ) {
+						window.title = prevTitle;
+						return;
+					}
+					if( haxe.Timer.stamp() - lastTime > 0.1 ) {
+						lastTime = haxe.Timer.stamp();
+						window.title = '(${Std.int(done*1000/(done+all.length))/10}%) '+all[0];
+						haxe.Timer.delay(loop,0);
+						return;
+					}
+					var path = all.shift();
+					var e = try hxd.res.Loader.currentInstance.load(path).entry catch( e : hxd.res.NotFound ) null;
+					if( e == null && path == "" ) e = hxd.res.Loader.currentInstance.fs.getRoot();
+					if( e != null ) done++;
+					if( e != null && e.isDirectory ) {
+						var base = path;
+						if( base != "" ) base += "/";
+						for( f in sys.FileSystem.readDirectory(getPath(path)) ) {
+							var path = base + f;
+							if( path == ".tmp" ) continue;
+							if( sys.FileSystem.isDirectory(getPath(path)) )
+								all.unshift(path);
+							else
+								all.push(path);
+						}
+					}
+				}
+			}
+			loop();
 		});
 
 		for( r in renderers ) {
@@ -982,6 +1038,9 @@ class Ide {
 		}).attr("disabled", databaseDiff == null ? "disabled" : null);
 		db.find(".dbCustom").click(function(_) {
 			open("hide.view.CdbCustomTypes",{});
+		});
+		db.find(".dbFormulas").click(function(_) {
+			open("hide.comp.cdb.FormulasView",{ path : config.current.get("cdb.formulasFile") });
 		});
 
 		// layout

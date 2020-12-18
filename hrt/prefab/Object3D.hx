@@ -103,7 +103,7 @@ class Object3D extends Prefab {
 		return m;
 	}
 
-	public function applyPos( o : h3d.scene.Object ) {
+	public function applyTransform( o : h3d.scene.Object ) {
 		o.x = x;
 		o.y = y;
 		o.z = z;
@@ -115,7 +115,7 @@ class Object3D extends Prefab {
 
 	override function updateInstance( ctx: Context, ?propName : String ) {
 		var o = ctx.local3d;
-		applyPos(o);
+		applyTransform(o);
 		o.visible = visible;
 	}
 
@@ -159,6 +159,7 @@ class Object3D extends Prefab {
 		var localBounds = [];
 		var totalSeparateBounds = 0.;
 		var visibleMeshes = [];
+		var hasSkin = false;
 
 		inline function getVolume(b:h3d.col.Bounds) {
 			var c = b.getSize();
@@ -178,6 +179,15 @@ class Object3D extends Prefab {
 
 			var localMat = mesh.getAbsPos().clone();
 			localMat.multiply(localMat, invRootMat);
+
+			if( mesh.primitive == null ) continue;
+			visibleMeshes.push(mesh);
+
+			if( Std.downcast(mesh, h3d.scene.Skin) != null ) {
+				hasSkin = true;
+				continue;
+			}
+
 			var lb = mesh.primitive.getBounds().clone();
 			lb.transform(localMat);
 			bounds.add(lb);
@@ -189,17 +199,19 @@ class Object3D extends Prefab {
 				totalSeparateBounds -= getVolume(tmp);
 			}
 			localBounds.push(lb);
-
-			visibleMeshes.push(mesh);
 		}
 		if( visibleMeshes.length == 0 )
 			return null;
-		var meshCollider = new h3d.col.Collider.GroupCollider([for(m in visibleMeshes) {
+		var colliders = [for(m in visibleMeshes) {
 			var c : h3d.col.Collider = try m.getGlobalCollider() catch(e: Dynamic) null;
 			if(c != null) c;
-		}]);
+		}];
+		var meshCollider = colliders.length == 1 ? colliders[0] : new h3d.col.Collider.GroupCollider(colliders);
 		var collider : h3d.col.Collider = new h3d.col.ObjectCollider(local3d, bounds);
-		if( totalSeparateBounds / getVolume(bounds) < 0.5 ) {
+		if( hasSkin ) {
+			collider = meshCollider; // can't trust bounds
+			meshCollider = null;
+		} else if( totalSeparateBounds / getVolume(bounds) < 0.5 ) {
 			collider = new h3d.col.Collider.OptimizedCollider(collider, meshCollider);
 			meshCollider = null;
 		}

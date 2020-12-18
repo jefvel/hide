@@ -246,7 +246,7 @@ class Level3D extends FileView {
 	var curGridWidth : Int;
 	var curGridHeight : Int;
 
-	var showGrid = true;
+	var showGrid = false;
 	var currentVersion : Int = 0;
 	var lastSyncChange : Float = 0.;
 	var sceneFilters : Map<String, Bool>;
@@ -259,6 +259,8 @@ class Level3D extends FileView {
 	function get_properties() return sceneEditor.properties;
 
 	override function onDisplay() {
+		if( sceneEditor != null ) sceneEditor.dispose();
+
 		data = cast(hrt.prefab.Library.create("l3d"), hrt.prefab.l3d.Level3D);
 		var content = sys.io.File.getContent(getPath());
 		data.loadData(haxe.Json.parse(content));
@@ -306,7 +308,6 @@ class Level3D extends FileView {
 
 		levelProps = new hide.comp.PropsEditor(undo,null,element.find(".level-props"));
 		sceneEditor = new Level3DSceneEditor(this, data);
-		sceneEditor.addSearchBox(element.find(".hide-scenetree").first());
 		element.find(".hide-scenetree").first().append(sceneEditor.tree.element);
 		element.find(".favorites-tree").first().append(sceneEditor.favTree.element);
 		element.find(".hide-scroll").first().append(sceneEditor.properties.element);
@@ -320,7 +321,6 @@ class Level3D extends FileView {
 		// Level edit
 		{
 			var edit = new LevelEditContext(this, sceneEditor.context);
-			edit.prefabPath = state.path;
 			edit.properties = levelProps;
 			edit.scene = sceneEditor.scene;
 			edit.cleanups = [];
@@ -404,7 +404,7 @@ class Level3D extends FileView {
 			'Draw Calls: ${scene.engine.drawCalls}',
 		];
 		statusText.text = lines.join("\n");
-		sceneEditor.event.wait(0.5, updateStats);
+		haxe.Timer.delay(function() sceneEditor.event.wait(0.5, updateStats), 0);
 	}
 
 	function bakeLights() {

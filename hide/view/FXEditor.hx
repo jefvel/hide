@@ -281,7 +281,6 @@ class FXEditor extends FileView {
 		fxprops = new hide.comp.PropsEditor(undo,null,element.find(".fx-props"));
 		{
 			var edit = new FXEditContext(this, sceneEditor.context);
-			edit.prefabPath = state.path;
 			edit.properties = fxprops;
 			edit.scene = sceneEditor.scene;
 			edit.cleanups = [];
@@ -425,7 +424,7 @@ class FXEditor extends FileView {
 			e.stopPropagation();
 		});
 
-		var wheelTimer : haxe.Timer;
+		var wheelTimer : haxe.Timer = null;
 		timeline.on("mousewheel", function(e) {
 			var step = e.originalEvent.wheelDelta > 0 ? 1.0 : -1.0;
 			xScale *= Math.pow(1.125, step);
